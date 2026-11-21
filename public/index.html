@@ -1,0 +1,727 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>SolidCraft Remote</title>
+<meta name="description" content="Control SolidCraft and its Claude agent from your phone.">
+<meta name="theme-color" content="#f5f5f4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#131314" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="SC Remote">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<style>
+  :root {
+    --bg: #f5f5f4; --surface: #ffffff; --surface-2: #efeeec; --text: #1c1b1a; --muted: #6b6864;
+    --border: #e2e0dc; --accent: #2563eb; --accent-text: #ffffff; --accent-soft: #e6eefe;
+    --ok: #15803d; --err: #b91c1c; --err-soft: #fdecec; --warn: #b45309; --viewer: #e9e8e5;
+    --radius: 14px; color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131314; --surface: #1c1c1e; --surface-2: #26262a; --text: #ececec; --muted: #9a9aa0;
+      --border: #2e2e33; --accent: #5b93ff; --accent-text: #0b1220; --accent-soft: #1c2a46;
+      --ok: #4ade80; --err: #f87171; --err-soft: #3a1d1d; --warn: #fbbf24; --viewer: #0d0d0e;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: grid; height: 100dvh; overflow: hidden;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+    grid-template-areas: "top" "viewer" "tools" "log" "composer";
+    -webkit-tap-highlight-color: transparent;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  /* top bar */
+  .top {
+    grid-area: top; display: flex; align-items: center; gap: 10px;
+    padding: calc(8px + env(safe-area-inset-top)) 12px 8px 16px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--ok); }
+  .dot.off { background: var(--err); }
+  .design { min-width: 0; flex: 1; }
+  .design .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .design .sub { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .design .sub.warn { color: var(--warn); }
+  .model-pill {
+    display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 10px 0 12px;
+    border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font-size: 13px; color: var(--muted);
+  }
+  .model-pill svg { width: 18px; height: 18px; }
+
+  /* viewer */
+  .viewer {
+    grid-area: viewer; position: relative; height: 36dvh; background: var(--viewer);
+    transition: height .25s ease; overflow: hidden;
+  }
+  .viewer.big { height: 62dvh; }
+  .viewer img { width: 100%; height: 100%; object-fit: contain; display: block; opacity: 0; transition: opacity .2s; }
+  .viewer.has-shot img { opacity: 1; }
+  .viewer-msg {
+    position: absolute; left: 12px; right: 12px; bottom: 10px; text-align: center; font-size: 13px; color: var(--muted);
+    pointer-events: none;
+  }
+  .viewer-msg:empty { display: none; }
+  .viewer.has-shot .viewer-msg { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; color: var(--text); }
+  .viewer .corner {
+    position: absolute; top: 8px; right: 8px; width: 36px; height: 36px; border-radius: 10px;
+    display: grid; place-items: center; background: color-mix(in srgb, var(--surface) 85%, transparent);
+    border: 1px solid var(--border);
+  }
+  .viewer .spin {
+    position: absolute; top: 14px; left: 14px; width: 18px; height: 18px; border-radius: 50%;
+    border: 2px solid var(--border); border-top-color: var(--accent); animation: spin .8s linear infinite; display: none;
+  }
+  .viewer.loading .spin { display: block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* view + edit buttons */
+  .tools {
+    grid-area: tools; display: flex; gap: 6px; padding: 8px 12px; overflow-x: auto; scrollbar-width: none;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+  }
+  .tools::-webkit-scrollbar { display: none; }
+  .chip {
+    flex: none; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px;
+    border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); font-size: 13.5px;
+  }
+  .chip svg { width: 17px; height: 17px; }
+  .chip:active { transform: scale(.97); }
+  .chip:disabled { opacity: .5; }
+  .sep { width: 1px; flex: none; background: var(--border); margin: 4px 2px; }
+  .chip.primary { background: var(--accent-soft); border-color: transparent; color: var(--accent); font-weight: 600; }
+
+  /* chat */
+  .log { grid-area: log; overflow-y: auto; padding: 14px 14px 6px; display: flex; flex-direction: column; gap: 10px; overscroll-behavior: contain; }
+  .msg { max-width: 92%; overflow-wrap: anywhere; }
+  .msg p { margin: 0 0 6px; } .msg p:last-child { margin-bottom: 0; }
+  .msg ul, .msg ol { margin: 2px 0 6px; padding-left: 20px; }
+  .msg code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
+  .msg pre { margin: 4px 0; padding: 8px 10px; background: var(--surface-2); border-radius: 8px; overflow-x: auto; }
+  .msg pre code { background: none; padding: 0; }
+  .msg.user {
+    align-self: flex-end; background: var(--accent-soft); padding: 9px 13px; border-radius: 18px 18px 5px 18px; white-space: pre-wrap;
+  }
+  .msg.assistant { align-self: flex-start; }
+  .msg.err { align-self: stretch; max-width: none; background: var(--err-soft); color: var(--err); padding: 8px 12px; border-radius: 10px; font-size: 14px; }
+  .note, .done { align-self: center; font-size: 12px; color: var(--muted); }
+
+  details.step {
+    align-self: stretch; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; font-size: 13.5px;
+  }
+  details.step summary {
+    list-style: none; display: flex; align-items: center; gap: 8px; padding: 7px 10px; min-height: 36px;
+  }
+  details.step summary::-webkit-details-marker { display: none; }
+  .step .st { width: 16px; height: 16px; flex: none; display: grid; place-items: center; }
+  .step.pending .st::before { content: ""; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+  .step.ok .st::before { content: "✓"; color: var(--ok); font-weight: 700; }
+  .step.fail .st::before { content: "✕"; color: var(--err); font-weight: 700; }
+  .step .nm { font-weight: 600; flex: none; }
+  .step .sm { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .step .body { padding: 0 10px 9px 34px; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; display: grid; gap: 4px; }
+  .step .body .res.bad { color: var(--err); }
+
+  .working { align-self: flex-start; display: flex; gap: 4px; padding: 6px 2px; }
+  .working span { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
+  .working span:nth-child(2) { animation-delay: .2s; } .working span:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+
+  .empty { margin: auto 0; padding: 12px 4px; text-align: center; color: var(--muted); }
+  .empty h2 { margin: 0 0 4px; font-size: 17px; color: var(--text); }
+  .empty p { margin: 0 auto 14px; max-width: 34ch; font-size: 14px; }
+  .suggest { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .suggest .chip { height: auto; padding: 8px 12px; text-align: left; }
+
+  .msg.user .thumbs { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; margin-bottom: 6px; }
+  .msg.user .thumbs img { height: 84px; max-width: 140px; object-fit: cover; border-radius: 10px; display: block; }
+  .msg.user .fchips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; margin-bottom: 6px; }
+  .fchip { font-size: 12.5px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 3px 8px; }
+  .msg.user:has(.thumbs, .fchips) { background: none; padding: 0; }
+  .msg.user:has(.thumbs, .fchips) .utext { background: var(--accent-soft); padding: 9px 13px; border-radius: 18px 18px 5px 18px; }
+
+  /* composer */
+  .composer {
+    grid-area: composer; display: flex; flex-direction: column; gap: 8px;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); background: var(--surface); border-top: 1px solid var(--border);
+  }
+  .composer .row { display: flex; align-items: flex-end; gap: 8px; }
+  .opts { display: flex; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+  .opts::-webkit-scrollbar { display: none; }
+  .opt {
+    flex: none; display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 11px;
+    border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--text);
+    font-family: inherit; font-size: 13px;
+  }
+  .opt svg { width: 16px; height: 16px; }
+  .pick { position: relative; flex: none; display: inline-flex; }
+  .pick select { appearance: none; -webkit-appearance: none; padding-right: 28px; cursor: pointer; }
+  .pick svg { position: absolute; right: 9px; top: 8px; width: 14px; height: 14px; color: var(--muted); pointer-events: none; }
+  .tray { display: flex; gap: 10px; overflow-x: auto; padding: 9px 8px 0 0; scrollbar-width: none; }
+  .tray[hidden] { display: none; }
+  .att { position: relative; flex: none; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+  .att.img { width: 64px; height: 64px; }
+  .att.img img { width: 100%; height: 100%; object-fit: cover; border-radius: 11px; display: block; }
+  .att.file { height: 64px; max-width: 170px; padding: 9px 26px 9px 10px; display: grid; align-content: center; }
+  .att .fn { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .att .fs { font-size: 12px; color: var(--muted); }
+  .att.bad { border-color: var(--err); } .att.bad .fs { color: var(--err); }
+  .att.busy .fs::after { content: ""; display: inline-block; width: 9px; height: 9px; margin-left: 6px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--accent); animation: spin .8s linear infinite; vertical-align: -1px; }
+  .att .x {
+    position: absolute; top: -7px; right: -7px; width: 22px; height: 22px; border-radius: 50%; border: 0;
+    background: var(--text); color: var(--bg); font-size: 15px; line-height: 22px; padding: 0;
+  }
+  .viewer .start { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); height: 40px; padding: 0 16px; }
+  .viewer .start[hidden] { display: none; }
+  .composer textarea {
+    flex: 1; resize: none; min-height: 42px; max-height: 140px; padding: 10px 15px; border-radius: 21px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text); font-family: inherit; font-size: 16px; line-height: 1.35; outline: none;
+  }
+  .composer textarea:focus { border-color: var(--accent); }
+  .send {
+    width: 42px; height: 42px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-text);
+    display: grid; place-items: center; flex: none;
+  }
+  .send .i-stop { display: none; }
+  .send.stop { background: var(--text); color: var(--bg); }
+  .send.stop .i-send { display: none; } .send.stop .i-stop { display: block; }
+  .send:disabled { opacity: .4; }
+
+  /* settings sheet */
+  dialog {
+    border: 1px solid var(--border); border-radius: 18px; padding: 0; background: var(--surface); color: var(--text);
+    width: min(440px, calc(100vw - 24px)); box-shadow: 0 20px 60px rgba(0,0,0,.35);
+  }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  .sheet { padding: 18px 18px calc(18px + env(safe-area-inset-bottom)); display: grid; gap: 14px; }
+  .sheet header { display: flex; align-items: center; justify-content: space-between; }
+  .sheet h2 { margin: 0; font-size: 18px; }
+  .sheet label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+  .sheet select {
+    height: 42px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-family: inherit; font-size: 15px; padding: 0 10px;
+  }
+  .row2 { display: grid; grid-template-columns: 1.4fr 1fr; gap: 10px; }
+  .btn { height: 44px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); font-weight: 600; }
+  .btn.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+  .icon-btn { width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); display: grid; place-items: center; }
+  .hint { font-size: 12.5px; color: var(--muted); margin: 0; }
+  .usage { display: grid; gap: 8px; }
+  .usage .u { display: grid; grid-template-columns: 70px 1fr 40px; align-items: center; gap: 8px; font-size: 13px; }
+  .bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+  .u .pct { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: calc(76px + env(safe-area-inset-bottom)); transform: translate(-50%, 20px);
+    background: var(--text); color: var(--bg); padding: 9px 14px; border-radius: 12px; font-size: 14px;
+    opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; max-width: calc(100vw - 32px); z-index: 10;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  @media (max-height: 520px) { .viewer, .viewer.big { height: 24dvh; } }
+  @media (min-width: 900px) {
+    body {
+      grid-template-columns: minmax(0, 1.25fr) minmax(380px, 1fr);
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      grid-template-areas: "top top" "viewer log" "tools composer";
+    }
+    .viewer, .viewer.big { height: auto; border-right: 1px solid var(--border); }
+    .viewer .corner { display: none; }
+    .tools { border-bottom: 0; border-top: 1px solid var(--border); border-right: 1px solid var(--border); align-items: center; }
+  }
+</style>
+</head>
+<body>
+  <header class="top">
+    <span class="dot" id="conn" aria-hidden="true"></span>
+    <div class="design">
+      <div class="name" id="designName">SolidCraft</div>
+      <div class="sub" id="designSub">Connecting to your PC…</div>
+    </div>
+    <button class="icon-btn" id="settingsBtn" aria-label="Chat and usage">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </header>
+
+  <section class="viewer" id="viewer" aria-label="Live view of the design">
+    <img id="shot" alt="Render of the design open in SolidCraft">
+    <div class="spin" aria-hidden="true"></div>
+    <div class="viewer-msg" id="viewerMsg">Loading the view…</div>
+    <button class="chip primary start" id="startBtn" hidden>Start SolidCraft on the PC</button>
+    <button class="corner" id="expandBtn" aria-label="Make the view bigger">
+      <svg viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+    </button>
+  </section>
+
+  <nav class="tools" aria-label="View and edit">
+    <button class="chip" data-view="iso">Iso</button>
+    <button class="chip" data-view="front">Front</button>
+    <button class="chip" data-view="top">Top</button>
+    <button class="chip" data-view="right">Right</button>
+    <button class="chip" data-view="fit">Fit</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button class="chip" data-action="undo" aria-label="Undo">
+      <svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>Undo
+    </button>
+    <button class="chip" data-action="redo" aria-label="Redo">
+      <svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>Redo
+    </button>
+    <button class="chip primary" data-action="save" aria-label="Save">
+      <svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>Save
+    </button>
+  </nav>
+
+  <main class="log" id="log" aria-live="polite"></main>
+
+  <form class="composer" id="composer">
+    <div class="tray" id="tray" hidden aria-label="Attachments"></div>
+    <div class="opts">
+      <button class="opt" type="button" id="photoBtn" aria-label="Attach a photo">
+        <svg viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3.5"/></svg>Photo
+      </button>
+      <button class="opt" type="button" id="fileBtn" aria-label="Attach a file">
+        <svg viewBox="0 0 24 24"><path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>File
+      </button>
+      <span class="pick">
+        <select class="opt" id="modelSel" aria-label="Model"></select>
+        <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </span>
+      <span class="pick">
+        <select class="opt" id="effortSel" aria-label="Effort"></select>
+        <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </span>
+    </div>
+    <div class="row">
+      <textarea id="input" rows="1" placeholder="Ask for a change…" enterkeyhint="send" aria-label="Message to the agent"></textarea>
+      <button class="send" id="sendBtn" type="submit" aria-label="Send">
+        <svg class="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        <svg class="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/></svg>
+      </button>
+    </div>
+    <input type="file" id="photoInput" accept="image/*" multiple hidden>
+    <input type="file" id="fileInput" multiple hidden>
+  </form>
+
+  <dialog id="settings">
+    <form class="sheet" method="dialog" id="settingsForm">
+      <header>
+        <h2>Chat</h2>
+        <button class="icon-btn" value="close" aria-label="Close">
+          <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </header>
+      <button class="btn primary" type="button" id="newChatBtn">Start a new chat</button>
+      <p class="hint">Clears this conversation. The model and effort are picked next to the message box, and changing them keeps the current chat.</p>
+      <div class="usage" id="usage"></div>
+      <p class="hint">Runs Claude Code on your PC with your Claude subscription. The agent can only use SolidCraft's tools: no shell, no other files.</p>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status"></div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const els = {
+    conn: $('conn'), designName: $('designName'), designSub: $('designSub'),
+    viewer: $('viewer'), shot: $('shot'), viewerMsg: $('viewerMsg'), startBtn: $('startBtn'), log: $('log'),
+    input: $('input'), send: $('sendBtn'), settings: $('settings'), modelSel: $('modelSel'), effortSel: $('effortSel'), usage: $('usage'), toast: $('toast'),
+    tray: $('tray'), photoInput: $('photoInput'), fileInput: $('fileInput'),
+  };
+  const state = { busy: false, model: '', effort: '', models: {}, efforts: [], usage: null, linked: false, items: 0 };
+  const attachments = []; // {kind: 'image', name, mime, data, url} | {kind: 'file', name, size, id, uploading, error}
+  let uploading = 0;
+  const bubbles = new Map();
+  const steps = new Map();
+  let working = null;
+
+  const LABELS = {
+    batch: 'Build', execute: 'Command', inspect_design: 'Look at design', measure: 'Measure', screenshot: 'Look at view',
+    save: 'Save', export: 'Export', undo: 'Undo', redo: 'Redo', set_parameter: 'Set parameter', skill_reference: 'Read guide',
+    list_commands: 'Look up commands', describe_command: 'Look up command', body_topology: 'Inspect geometry',
+    check_parameters: 'Check parameters', open: 'Open design', new_design: 'New design', compare_picture: 'Compare picture',
+    pending: 'Wait', running: 'Check running', cancel: 'Cancel', crash_reports: 'Crash reports',
+  };
+
+  // ---------- tiny markdown
+  const esc = s => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const inline = s => esc(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[\s(])\*([^*\s][^*]*?)\*(?=[\s).,!?:;]|$)/g, '$1<em>$2</em>');
+  function md(src) {
+    let html = '', list = null, code = null;
+    const close = () => { if (list) { html += `</${list}>`; list = null; } };
+    for (const line of src.replace(/\r/g, '').split('\n')) {
+      if (code) { if (/^\s*```/.test(line)) { html += `<pre><code>${esc(code.join('\n'))}</code></pre>`; code = null; } else code.push(line); continue; }
+      if (/^\s*```/.test(line)) { close(); code = []; continue; }
+      let m;
+      if ((m = line.match(/^\s*[-*•]\s+(.*)/))) { if (list !== 'ul') { close(); html += '<ul>'; list = 'ul'; } html += `<li>${inline(m[1])}</li>`; continue; }
+      if ((m = line.match(/^\s*\d+[.)]\s+(.*)/))) { if (list !== 'ol') { close(); html += '<ol>'; list = 'ol'; } html += `<li>${inline(m[1])}</li>`; continue; }
+      close();
+      if ((m = line.match(/^#{1,6}\s+(.*)/))) { html += `<p><strong>${inline(m[1])}</strong></p>`; continue; }
+      if (line.trim()) html += `<p>${inline(line)}</p>`;
+    }
+    if (code) html += `<pre><code>${esc(code.join('\n'))}</code></pre>`;
+    close();
+    return html;
+  }
+
+  // ---------- chat log
+  const nearBottom = () => els.log.scrollHeight - els.log.scrollTop - els.log.clientHeight < 90;
+  function stick(fn) { const s = nearBottom(); fn(); if (s) els.log.scrollTop = els.log.scrollHeight; }
+  function add(el) {
+    $('empty')?.remove();
+    els.log.appendChild(el);
+    if (working && state.busy) els.log.appendChild(working);
+    state.items++;
+  }
+  const div = (cls, text) => { const d = document.createElement('div'); d.className = cls; if (text != null) d.textContent = text; return d; };
+
+  function showEmpty() {
+    if (state.items || $('empty')) return;
+    const e = div('empty'); e.id = 'empty';
+    e.innerHTML = '<h2>What should we change?</h2><p>The agent works on the design open in SolidCraft on your PC. Each step shows here and the view updates as it goes.</p><div class="suggest"></div>';
+    for (const s of ['Describe the design that’s open', 'List the parameters and their values', 'Export all bodies as 3MF next to the design']) {
+      const b = document.createElement('button'); b.className = 'chip'; b.type = 'button'; b.textContent = s;
+      b.onclick = () => send({ text: s });
+      e.querySelector('.suggest').appendChild(b);
+    }
+    els.log.appendChild(e);
+  }
+
+  function bubble(k) {
+    let b = bubbles.get(k);
+    if (!b) { b = { el: div('msg assistant'), raw: '' }; bubbles.set(k, b); add(b.el); }
+    return b;
+  }
+
+  function render(ev) {
+    switch (ev.t) {
+      case 'user': {
+        const d = div('msg user');
+        if (ev.images?.length) {
+          const g = div('thumbs');
+          for (const u of ev.images) {
+            const a = document.createElement('a');
+            a.href = u; a.target = '_blank'; a.rel = 'noopener';
+            const im = new Image(); im.src = u; im.alt = 'Attached photo'; im.loading = 'lazy';
+            a.appendChild(im); g.appendChild(a);
+          }
+          d.appendChild(g);
+        }
+        if (ev.files?.length) { const g = div('fchips'); ev.files.forEach(n => g.appendChild(div('fchip', n))); d.appendChild(g); }
+        if (ev.text) d.appendChild(div('utext', ev.text));
+        add(d);
+        break;
+      }
+      case 'text': { const b = bubble(ev.k); b.raw = ev.text; b.el.innerHTML = md(ev.text); break; }
+      case 'tool': {
+        const d = document.createElement('details');
+        d.className = 'step pending';
+        d.innerHTML = '<summary><span class="st"></span><span class="nm"></span><span class="sm"></span></summary><div class="body"></div>';
+        d.querySelector('.nm').textContent = LABELS[ev.name] || ev.name;
+        d.querySelector('.sm').textContent = ev.summary || '';
+        if (ev.summary) d.querySelector('.body').appendChild(div('in', ev.summary));
+        steps.set(ev.id, d);
+        add(d);
+        break;
+      }
+      case 'result': {
+        const d = steps.get(ev.id);
+        if (!d) break;
+        d.classList.remove('pending');
+        d.classList.add(ev.ok ? 'ok' : 'fail');
+        if (ev.summary) d.querySelector('.body').appendChild(div('res' + (ev.ok ? '' : ' bad'), ev.summary));
+        if (!ev.ok) d.open = true;
+        break;
+      }
+      case 'error': add(div('msg err', ev.text)); break;
+      case 'note': add(div('note', ev.text)); break;
+      case 'done': if (ev.ms) add(div('done', `${ev.ok ? 'Done' : 'Ended'} · ${fmtTime(ev.ms)}`)); break;
+    }
+  }
+  const fmtTime = ms => ms < 60000 ? `${Math.max(1, Math.round(ms / 1000))} s` : `${Math.floor(ms / 60000)} min ${Math.round((ms % 60000) / 1000)} s`;
+
+  function setBusy(b) {
+    state.busy = b;
+    if (b) {
+      if (!working) { working = div('working'); working.innerHTML = '<span></span><span></span><span></span>'; working.setAttribute('aria-label', 'Working'); }
+      stick(() => els.log.appendChild(working));
+    } else working?.remove();
+    updateSend();
+  }
+  function updateSend() {
+    const stop = state.busy && !els.input.value.trim() && !attachments.length;
+    els.send.classList.toggle('stop', stop);
+    els.send.setAttribute('aria-label', stop ? 'Stop the agent' : 'Send');
+    els.send.disabled = uploading > 0 && !stop;
+  }
+
+  // ---------- attachments
+  const fmtSize = n => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1048576).toFixed(1)} MB`;
+
+  // Photos are shrunk on the phone (long side 1568 px, JPEG) before sending: what the model can use, and quick over mobile data.
+  async function shrink(file) {
+    const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    const s = Math.min(1, 1568 / Math.max(bmp.width, bmp.height));
+    const w = Math.max(1, Math.round(bmp.width * s)), h = Math.max(1, Math.round(bmp.height * s));
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(bmp, 0, 0, w, h);
+    bmp.close?.();
+    const blob = await new Promise((res, rej) => c.toBlob(b => (b ? res(b) : rej(new Error('Could not read the photo'))), 'image/jpeg', 0.86));
+    const data = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
+    return { name: file.name || 'photo.jpg', mime: 'image/jpeg', data, url: URL.createObjectURL(blob) };
+  }
+
+  async function addFiles(list) {
+    for (const f of Array.from(list)) {
+      if (attachments.length >= 10) { toast('Up to 10 attachments per message'); break; }
+      const isImage = /^image\//i.test(f.type) || /\.(jpe?g|png|webp|gif|heic|heif)$/i.test(f.name);
+      if (isImage && attachments.filter(a => a.kind === 'image').length < 8) {
+        try { attachments.push({ kind: 'image', ...(await shrink(f)) }); renderTray(); continue; }
+        catch { /* not decodable here (e.g. HEIC): send it as a file instead */ }
+      }
+      const item = { kind: 'file', name: f.name || 'file', size: f.size, uploading: true };
+      attachments.push(item);
+      uploading++;
+      renderTray();
+      fetch('/api/upload', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(item.name) }, body: f })
+        .then(async r => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || 'Upload failed'); item.id = d.id; })
+        .catch(e => { item.error = e.message; toast(`${item.name}: ${e.message}`); })
+        .finally(() => { item.uploading = false; uploading--; renderTray(); });
+    }
+  }
+
+  function renderTray() {
+    els.tray.innerHTML = '';
+    els.tray.hidden = !attachments.length;
+    for (const a of attachments) {
+      const t = div(`att ${a.kind === 'image' ? 'img' : 'file'}${a.uploading ? ' busy' : ''}${a.error ? ' bad' : ''}`);
+      if (a.kind === 'image') { const im = new Image(); im.src = a.url; im.alt = a.name; t.appendChild(im); }
+      else { t.appendChild(div('fn', a.name)); t.appendChild(div('fs', a.error ? 'Failed' : a.uploading ? 'Uploading' : fmtSize(a.size))); }
+      const x = document.createElement('button');
+      x.type = 'button'; x.className = 'x'; x.textContent = '×'; x.setAttribute('aria-label', `Remove ${a.name}`);
+      x.onclick = () => { if (a.url) URL.revokeObjectURL(a.url); attachments.splice(attachments.indexOf(a), 1); renderTray(); };
+      t.appendChild(x);
+      els.tray.appendChild(t);
+    }
+    updateSend();
+  }
+
+  // ---------- server calls
+  async function post(path, body = {}) {
+    const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    let data = {};
+    try { data = await r.json(); } catch {}
+    if (!r.ok) throw new Error(data.error || data.text || `Request failed (${r.status})`);
+    return data;
+  }
+  let toastTimer;
+  function toast(text) {
+    els.toast.textContent = text;
+    els.toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => els.toast.classList.remove('show'), 3200);
+  }
+
+  async function send(body) {
+    try { await post('/api/send', body); return true; }
+    catch (e) { toast(e.message); return false; }
+  }
+
+  // ---------- live view
+  let shotBusy = false, shotAgain = false, wantView = null, shotUrl = null;
+  async function refreshShot(view) {
+    if (view) wantView = view;
+    if (shotBusy) { shotAgain = true; return; }
+    shotBusy = true;
+    const v = wantView; wantView = null;
+    els.viewer.classList.add('loading');
+    try {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const w = Math.round(els.viewer.clientWidth * dpr), h = Math.round(els.viewer.clientHeight * dpr);
+      const r = v
+        ? await fetch('/api/shot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ view: v, w, h }) })
+        : await fetch(`/api/shot?w=${w}&h=${h}&t=${Date.now()}`);
+      if (!r.ok) { let msg = 'Could not get the view'; try { msg = (await r.json()).error || msg; } catch {} throw new Error(msg); }
+      const url = URL.createObjectURL(await r.blob());
+      await new Promise(res => { els.shot.onload = els.shot.onerror = res; els.shot.src = url; });
+      if (shotUrl) URL.revokeObjectURL(shotUrl);
+      shotUrl = url;
+      els.viewer.classList.add('has-shot');
+      els.viewerMsg.textContent = '';
+    } catch (e) {
+      els.viewerMsg.textContent = e.message.length > 160 ? e.message.slice(0, 159) + '…' : e.message;
+    } finally {
+      shotBusy = false;
+      els.viewer.classList.remove('loading');
+      if (shotAgain || wantView) { shotAgain = false; refreshShot(); }
+    }
+  }
+
+  // ---------- status + settings
+  function setStatus(s) {
+    els.conn.className = 'dot ' + (s.connected ? 'on' : 'off');
+    els.startBtn.hidden = !!s.connected;
+    els.designSub.classList.remove('warn');
+    if (s.connected) {
+      els.designName.textContent = s.name;
+      els.designSub.textContent = s.dirty ? 'Unsaved changes' : 'Saved';
+      els.designSub.classList.toggle('warn', s.dirty);
+      els.designSub.title = s.path || '';
+    } else {
+      els.designName.textContent = 'SolidCraft';
+      els.designSub.textContent = 'Can’t reach SolidCraft. Is it open on your PC?';
+    }
+  }
+  function fillSettings() {
+    els.modelSel.innerHTML = Object.entries(state.models).map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`).join('');
+    els.effortSel.innerHTML = state.efforts.map(e => `<option value="${esc(e)}">${esc(e === 'xhigh' ? 'Extra high' : e[0].toUpperCase() + e.slice(1))} effort</option>`).join('');
+    els.modelSel.value = state.model;
+    els.effortSel.value = state.effort;
+    renderUsage();
+  }
+  function renderUsage() {
+    const u = state.usage;
+    if (!u || (u.fiveHour == null && u.week == null)) { els.usage.innerHTML = '<p class="hint">Usage shows here after the first message.</p>'; return; }
+    const row = (label, v) => v == null ? '' :
+      `<div class="u"><span>${label}</span><span class="bar"><i style="width:${Math.min(100, Math.round(v * 100))}%"></i></span><span class="pct">${Math.round(v * 100)}%</span></div>`;
+    els.usage.innerHTML = '<p class="hint" style="margin:0">Claude plan usage</p>' + row('5-hour', u.fiveHour) + row('Weekly', u.week);
+  }
+
+  // ---------- events from the server
+  let es = null;
+  function connect() {
+    es?.close();
+    es = new EventSource('/api/events');
+    es.onmessage = e => {
+      const ev = JSON.parse(e.data);
+      stick(() => {
+        switch (ev.t) {
+          case 'snapshot':
+            els.log.innerHTML = ''; bubbles.clear(); steps.clear(); state.items = 0;
+            Object.assign(state, { model: ev.model, effort: ev.effort, models: ev.models, efforts: ev.efforts, usage: ev.usage });
+            ev.items.forEach(render);
+            setBusy(ev.busy);
+            fillSettings();
+            showEmpty();
+            refreshShot();
+            break;
+          case 'busy': setBusy(ev.busy); break;
+          case 'delta': { const b = bubble(ev.k); b.raw += ev.text; b.el.innerHTML = md(b.raw); break; }
+          case 'shot': refreshShot(); break;
+          case 'status': setStatus(ev); break;
+          case 'usage': state.usage = ev.usage; renderUsage(); break;
+          case 'config': state.model = ev.model; state.effort = ev.effort; fillSettings(); break;
+          case 'session': break;
+          default: render(ev);
+        }
+      });
+    };
+    es.onerror = () => {
+      els.conn.className = 'dot off';
+      els.designSub.textContent = 'Reconnecting to your PC…';
+    };
+  }
+
+  // ---------- wiring
+  function autosize() { els.input.style.height = 'auto'; els.input.style.height = Math.min(els.input.scrollHeight, 140) + 'px'; }
+  els.input.addEventListener('input', () => { autosize(); updateSend(); });
+  els.input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('composer').requestSubmit(); }
+  });
+  $('composer').addEventListener('submit', async e => {
+    e.preventDefault();
+    const text = els.input.value.trim();
+    const ready = attachments.filter(a => !a.error && !a.uploading);
+    if (!text && !ready.length) { if (state.busy) post('/api/stop').catch(err => toast(err.message)); return; }
+    if (uploading) { toast('Still uploading, one moment'); return; }
+    const body = {
+      text,
+      images: ready.filter(a => a.kind === 'image').map(({ name, mime, data }) => ({ name, mime, data })),
+      files: ready.filter(a => a.kind === 'file' && a.id).map(a => a.id),
+    };
+    const kept = attachments.splice(0);
+    els.input.value = ''; autosize(); renderTray();
+    if (await send(body)) kept.forEach(a => a.url && URL.revokeObjectURL(a.url));
+    else { attachments.push(...kept); renderTray(); els.input.value = text; autosize(); updateSend(); }
+  });
+  els.input.addEventListener('paste', e => { if (e.clipboardData?.files?.length) { e.preventDefault(); addFiles(e.clipboardData.files); } });
+  $('photoBtn').addEventListener('click', () => els.photoInput.click());
+  $('fileBtn').addEventListener('click', () => els.fileInput.click());
+  for (const inp of [els.photoInput, els.fileInput]) inp.addEventListener('change', () => { addFiles(inp.files); inp.value = ''; });
+
+  const changeAgent = async () => {
+    try {
+      await post('/api/config', { model: els.modelSel.value, effort: els.effortSel.value });
+      state.model = els.modelSel.value; state.effort = els.effortSel.value;
+    } catch (e) { toast(e.message); fillSettings(); }
+  };
+  els.modelSel.addEventListener('change', changeAgent);
+  els.effortSel.addEventListener('change', changeAgent);
+
+  els.startBtn.addEventListener('click', async () => {
+    els.startBtn.disabled = true;
+    try { const r = await post('/api/start-solidcraft'); toast(r.text || 'Starting SolidCraft…'); els.viewerMsg.textContent = 'Starting SolidCraft on your PC…'; }
+    catch (e) { toast(e.message); }
+    finally { setTimeout(() => { els.startBtn.disabled = false; }, 5000); }
+  });
+
+  document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => refreshShot(b.dataset.view)));
+  document.querySelectorAll('[data-action]').forEach(b => b.addEventListener('click', async () => {
+    const name = b.dataset.action;
+    b.disabled = true;
+    try {
+      const r = await post('/api/action', { name });
+      toast(name === 'save' ? 'Saved' : name === 'undo' ? 'Undone' : 'Redone');
+      if (name !== 'save') refreshShot();
+    } catch (e) { toast(e.message); }
+    finally { b.disabled = false; }
+  }));
+
+  $('expandBtn').addEventListener('click', () => {
+    els.viewer.classList.toggle('big');
+    $('expandBtn').setAttribute('aria-label', els.viewer.classList.contains('big') ? 'Make the view smaller' : 'Make the view bigger');
+    setTimeout(() => refreshShot(), 300);
+  });
+  els.shot.addEventListener('click', () => refreshShot());
+
+  $('settingsBtn').addEventListener('click', () => { fillSettings(); els.settings.showModal(); });
+  els.settings.addEventListener('click', e => { if (e.target === els.settings) els.settings.close(); });
+  $('newChatBtn').addEventListener('click', async () => {
+    try {
+      await post('/api/new', { model: state.model, effort: state.effort });
+      els.settings.close();
+      toast('New chat started');
+    } catch (e) { toast(e.message); }
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    if (!es || es.readyState === EventSource.CLOSED) connect();
+    refreshShot();
+  });
+
+  connect();
+  // Installable as a phone app over HTTPS (see `solidcraft-remote https on`).
+  if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});
+})();
+</script>
+</body>
+</html>
