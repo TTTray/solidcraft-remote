@@ -40,9 +40,11 @@ curl -fsSL https://raw.githubusercontent.com/TTTray/solidcraft-remote/main/insta
 Or step by step:
 
 ```bash
-npm install -g --prefix ~/.local github:TTTray/solidcraft-remote
+npm install -g --prefix ~/.local --allow-git=root github:TTTray/solidcraft-remote
 ~/.local/bin/solidcraft-remote setup
 ```
+
+`--allow-git=root` lets npm 12 and newer fetch this one package from GitHub, and nothing it would pull in (it has no dependencies anyway). Older npm versions ignore the flag.
 
 `setup` checks everything, installs a background service that starts when you log in, and turns on Tailscale HTTPS. It then prints the address to open on your phone, something like `https://your-pc.your-tailnet.ts.net`.
 

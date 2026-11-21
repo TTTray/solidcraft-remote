@@ -19,7 +19,7 @@ if ! command -v claude >/dev/null && [ ! -x "$PREFIX/bin/claude" ]; then
 fi
 
 echo "Installing SolidCraft Remote into $PREFIX…"
-npm install -g --prefix "$PREFIX" "$SOURCE"
+npm install -g --prefix "$PREFIX" --allow-git=root "$SOURCE"
 
 CLAUDE="$(command -v claude || echo "$PREFIX/bin/claude")"
 if ! "$CLAUDE" auth status 2>/dev/null | grep -q '"loggedIn": *true'; then
