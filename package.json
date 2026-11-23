@@ -1,6 +1,6 @@
 {
   "name": "solidcraft-remote",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Control SolidCraft and a Claude Code agent from your phone over Tailscale: chat, photos, live view.",
   "type": "module",
   "bin": {
@@ -8,6 +8,7 @@
   },
   "files": [
     "bin/",
+    "lib/",
     "public/",
     "server.mjs",
     "install.sh",

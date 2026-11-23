@@ -4,9 +4,12 @@ import { spawnSync } from 'node:child_process';
 import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import net from 'node:net';
+import { loadConfig, anyPath, allowedRoots, extraPaths, CONFIG_FILE } from '../lib/files.mjs';
+
+await loadConfig();
 
 const SELF = fileURLToPath(import.meta.url);
 const ROOT = join(dirname(SELF), '..');
@@ -82,6 +85,8 @@ async function doctor() {
   const url = httpsUrl();
   url ? good(`HTTPS on: ${url}`) : note('HTTPS is off. Turn it on with: solidcraft-remote https on');
 
+  note(anyPath() ? 'Files: SolidCraft may open and save anywhere' : `Files: SolidCraft may open and save in ${allowedRoots().join(', ')}`);
+
   const active = run('systemctl', ['--user', 'is-active', UNIT]).stdout?.trim();
   active === 'active' ? good('Background service is running')
     : note(existsSync(UNIT_PATH) ? `Background service is ${active || 'stopped'}` : 'Background service is not installed (solidcraft-remote service install)');
@@ -153,6 +158,40 @@ function where() {
   if (!url && !ip) console.log(`  (Tailscale is not up; on this computer: http://127.0.0.1:${PORT})`);
 }
 
+// Folder access is saved in ~/.config/solidcraft-remote/env, which the server reads when it starts.
+async function saveConfig(changes) {
+  const text = await readFile(CONFIG_FILE, 'utf8').catch(() => '');
+  const lines = text.split('\n').filter(l => l.trim() && !Object.keys(changes).some(k => l.trim().startsWith(`${k}=`)));
+  for (const [k, v] of Object.entries(changes)) if (v !== '' && v != null) lines.push(`${k}=${v}`);
+  await mkdir(dirname(CONFIG_FILE), { recursive: true });
+  await writeFile(CONFIG_FILE, lines.join('\n') + '\n');
+  for (const [k, v] of Object.entries(changes)) { if (v === '' || v == null) delete process.env[k]; else process.env[k] = v; }
+}
+
+async function files(action, arg) {
+  if (action === 'allow') {
+    if (!arg) { bad('Name a folder: solidcraft-remote files allow ~/Designs'); return 1; }
+    const dir = resolve(arg.replace(/^~(?=\/|$)/, homedir()));
+    if (!existsSync(dir)) { bad(`${dir} doesn't exist`); return 1; }
+    await saveConfig({ SOLIDCRAFT_ALLOW_PATHS: [...new Set([...extraPaths(), dir])].join(':') });
+  } else if (action === 'anywhere') {
+    await saveConfig({ SOLIDCRAFT_ALLOW_ANY_PATH: '1' });
+  } else if (action === 'limit') {
+    await saveConfig({ SOLIDCRAFT_ALLOW_ANY_PATH: '' });
+  } else if (action === 'reset') {
+    await saveConfig({ SOLIDCRAFT_ALLOW_ANY_PATH: '', SOLIDCRAFT_ALLOW_PATHS: '' });
+  } else if (action) {
+    console.log(HELP); return 1;
+  }
+  if (anyPath()) good('SolidCraft may open, save and export anywhere on this PC (from the phone too)');
+  else { good('SolidCraft may open, save and export in:'); allowedRoots().forEach(r => note(r)); note('plus the folders of designs it opens or saves'); }
+  if (action && run('systemctl', ['--user', 'is-active', UNIT]).stdout?.trim() === 'active') {
+    pass('systemctl', ['--user', 'restart', UNIT]);
+    good('Restarted the background service to apply it');
+  }
+  return 0;
+}
+
 const HELP = `solidcraft-remote ${pkg.version}: control SolidCraft and a Claude agent from your phone
 
 Usage:
@@ -162,6 +201,9 @@ Usage:
   solidcraft-remote service <cmd>        install | uninstall | start | stop | restart | status | logs [-f]
   solidcraft-remote https <on|off>       serve it at https://<this-pc>.<tailnet>.ts.net (needed to install it as a phone app)
   solidcraft-remote url                  print the addresses to open on your phone
+  solidcraft-remote files                where SolidCraft may open and save files from the phone
+  solidcraft-remote files allow <dir>    add a folder        files anywhere   allow any folder
+  solidcraft-remote files limit          only listed folders  files reset     back to the defaults
   solidcraft-remote --version
 
 Settings (environment): PORT (8790), MODEL, EFFORT, CLAUDE_BIN, SOLIDCRAFT_CLI, SOLIDCRAFT_REMOTE_DATA`;
@@ -183,6 +225,7 @@ switch (cmd) {
   }
   case 'doctor': code = (await doctor()) ? 0 : 1; break;
   case 'url': where(); break;
+  case 'files': code = await files(sub, rest[0]); break;
   case 'service':
     switch (sub) {
       case 'install': code = await serviceInstall(); break;

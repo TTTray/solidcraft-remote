@@ -9,17 +9,17 @@ import { homedir, hostname } from 'node:os';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, randomBytes } from 'node:crypto';
+import { loadConfig, solidcraftArgs, recentDesigns, canBrowse, anyPath, allowedRoots, DATA_DIR, UPLOAD_DIR, OPENABLE } from './lib/files.mjs';
 
+await loadConfig(); // ~/.config/solidcraft-remote/env, written by `solidcraft-remote files …`
 const HERE = dirname(fileURLToPath(import.meta.url));
 const VERSION = JSON.parse(await readFile(join(HERE, 'package.json'), 'utf8').catch(() => '{}')).version || 'dev';
 const PORT = Number(process.env.PORT || 8790);
-const DATA_DIR = process.env.SOLIDCRAFT_REMOTE_DATA || join(process.env.XDG_DATA_HOME || join(homedir(), '.local/share'), 'solidcraft-remote');
 const CLAUDE_BIN = process.env.CLAUDE_BIN || [join(homedir(), '.local/bin/claude')].find(existsSync) || 'claude';
 const SOLIDCRAFT_CLI = process.env.SOLIDCRAFT_CLI || 'solidcraft-cli';
 const SOLIDCRAFT_APP = process.env.SOLIDCRAFT_APP || 'solidcraft';
 const SOLIDCRAFT_PORT = process.env.SOLIDCRAFT_PORT || '27878';
 const AGENT_DIR = join(DATA_DIR, 'agent-home'); // the agent's working folder (its chats are stored under this name)
-const UPLOAD_DIR = join(DATA_DIR, 'uploads'); // photos and files sent from the phone
 const MAX_UPLOAD = 200 * 1024 * 1024;
 const MAX_PDF_INLINE = 15 * 1024 * 1024; // PDFs up to this size are also shown to the agent directly
 const MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif', '.pdf': 'application/pdf' };
@@ -34,7 +34,9 @@ const SYSTEM_APPEND = `You are driving SolidCraft, a parametric CAD app, on the 
 - The design open in the app is the user's real work. Don't close, replace, or open another design, and don't overwrite files, unless they ask. Save only when asked.
 - If a request is ambiguous, make a sensible choice and say what you chose, rather than asking several questions.
 - The user often sends photos (a part, a hand sketch, a drawing) and describes what they want. Read sizes and features from them; when a dimension isn't readable, pick a sensible value, say so, and make it a parameter.
-- Files the user attaches are saved on this PC and their paths are given with the message; SolidCraft can open or import them from there.`;
+- Files the user attaches are saved on this PC and their paths are given with the message; SolidCraft can open or import them from there.
+- To open a design the user names ("open the tower crane"), find it with the files tools (recent_designs first, then find_files or list_folder), then use SolidCraft's open tool. Opening replaces the current design: if it has unsaved changes, ask before opening. If several files match, list the likely ones briefly and ask which.
+- ${anyPath() ? 'SolidCraft may open, save and export files anywhere on this PC.' : `SolidCraft may open, save and export files in: ${allowedRoots().join(', ')}, and the folders of designs opened or saved in this session.`}`;
 
 // ---------------------------------------------------------------- helpers
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
@@ -135,7 +137,7 @@ class McpClient {
   }
 }
 
-const sc = new McpClient(SOLIDCRAFT_CLI, ['mcp']);
+const sc = new McpClient(SOLIDCRAFT_CLI, solidcraftArgs());
 
 let shotChain = Promise.resolve();
 function screenshot({ w = 900, h = 900, view } = {}) {
@@ -260,7 +262,7 @@ async function designStatus() {
 }
 
 // ---------------------------------------------------------------- the agent (headless Claude Code)
-function shortTool(name = '') { return name.replace(/^mcp__solidcraft__/, ''); }
+function shortTool(name = '') { return name.replace(/^mcp__[a-z0-9_-]+?__/i, ''); }
 
 function summarizeInput(name, input = {}) {
   if (name === 'batch' && Array.isArray(input.commands)) {
@@ -281,7 +283,7 @@ function summarizeResult(content) {
 class Agent {
   constructor() {
     Object.assign(this, {
-      proc: null, items: [], clients: new Set(), pending: 0, interrupted: false, restartAfter: false,
+      proc: null, items: [], clients: new Set(), pending: 0, interrupted: false, restartAfter: false, notes: [],
       model: DEFAULT_MODEL, effort: DEFAULT_EFFORT, sessionId: null, usage: null,
       k: 0, textQueue: [], blockKeys: new Map(), curMsg: null, stderr: '',
     });
@@ -297,10 +299,13 @@ class Agent {
   }
 
   spawn() {
-    const mcp = { mcpServers: { solidcraft: { type: 'stdio', command: SOLIDCRAFT_CLI, args: ['mcp', '--allow-path', UPLOAD_DIR] } } };
+    const mcp = { mcpServers: {
+      solidcraft: { type: 'stdio', command: SOLIDCRAFT_CLI, args: solidcraftArgs() },
+      files: { type: 'stdio', command: process.execPath, args: [join(HERE, 'lib/files-mcp.mjs')] }, // read-only file finder
+    } };
     const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
       '--mcp-config', JSON.stringify(mcp), '--strict-mcp-config',
-      '--tools', '', '--allowedTools', 'mcp__solidcraft', '--permission-mode', 'dontAsk',
+      '--tools', '', '--allowedTools', 'mcp__solidcraft,mcp__files', '--permission-mode', 'dontAsk',
       '--setting-sources', '', '--model', this.model, '--effort', this.effort,
       '--append-system-prompt', SYSTEM_APPEND];
     if (this.sessionId) args.push('--resume', this.sessionId);
@@ -420,6 +425,7 @@ class Agent {
     const saved = [...images, ...docs, ...files];
     let full = text || (images.length ? 'See the attached photo.' : 'See the attached file.');
     if (saved.length) full += `\n\n(Attachments are saved on this PC: ${saved.map(f => f.path).join(', ')})`;
+    if (this.notes.length) { full = `(${this.notes.join(' ')})\n\n${full}`; this.notes = []; }
     const content = saved.length ? [
       ...images.map(i => ({ type: 'image', source: { type: 'base64', media_type: i.mime, data: i.data } })),
       ...docs.map(d => ({ type: 'document', title: d.name, source: { type: 'base64', media_type: 'application/pdf', data: d.data } })),
@@ -533,6 +539,10 @@ function makeHandler(bound) {
         }
         if (url.pathname === '/api/shot') return png(res, await screenshot({ w: url.searchParams.get('w'), h: url.searchParams.get('h') }));
         if (url.pathname === '/api/status') return json(res, 200, await designStatus());
+        if (url.pathname === '/api/recent') {
+          const designs = (await recentDesigns()).filter(d => d.exists && OPENABLE.includes(extname(d.path).toLowerCase()));
+          return json(res, 200, { designs });
+        }
         if (url.pathname.startsWith('/uploads/')) {
           const id = safeName(decodeURIComponent(url.pathname.slice(9)));
           const type = MIME[extname(id).toLowerCase()];
@@ -565,6 +575,22 @@ function makeHandler(bound) {
           case '/api/new': agent.reset(body.model, body.effort); return json(res, 200, { ok: true });
           case '/api/config': agent.configure(body.model, body.effort); return json(res, 200, { ok: true });
           case '/api/start-solidcraft': return json(res, 200, await startSolidCraft());
+          case '/api/open': {
+            // Open a design from the page's Open menu: one of SolidCraft's recent designs, or a file in an allowed place.
+            const path = String(body.path || '');
+            const recent = (await recentDesigns()).some(d => d.path === path && d.exists);
+            if (!OPENABLE.includes(extname(path).toLowerCase())) return json(res, 400, { error: 'SolidCraft can’t open that kind of file' });
+            if (!recent && !(await canBrowse(path))) return json(res, 403, { error: 'That folder isn’t allowed (see solidcraft-remote files)' });
+            const r = await sc.call('open', { path }, 180000);
+            if (r?.isError) return json(res, 409, { error: clip(textOf(r) || 'SolidCraft could not open it', 300) });
+            const name = path.split('/').pop();
+            agent.emit({ t: 'note', text: `Opened ${name}` });
+            agent.notes.push(`The user opened ${path} from the Open menu; it replaced the previous design.`);
+            agent.broadcast({ t: 'shot' });
+            pushStatus();
+            log(`opened ${path}`);
+            return json(res, 200, { ok: true, name });
+          }
           case '/api/shot': return png(res, await screenshot({ w: body.w, h: body.h, view: body.view }));
           case '/api/action': {
             const name = body.name;

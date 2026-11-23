@@ -183,6 +183,13 @@
     position: absolute; top: -7px; right: -7px; width: 22px; height: 22px; border-radius: 50%; border: 0;
     background: var(--text); color: var(--bg); font-size: 15px; line-height: 22px; padding: 0;
   }
+  .recent { display: grid; gap: 6px; max-height: 55dvh; overflow-y: auto; }
+  .recent-item {
+    text-align: left; border: 1px solid var(--border); background: var(--surface-2); border-radius: 12px; padding: 9px 12px;
+  }
+  .recent-item:active { transform: scale(.99); }
+  .recent-item .rn { font-weight: 600; overflow-wrap: anywhere; }
+  .recent-item .rf { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
   .viewer .start { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); height: 40px; padding: 0 16px; }
   .viewer .start[hidden] { display: none; }
   .composer textarea {
@@ -266,6 +273,10 @@
   </section>
 
   <nav class="tools" aria-label="View and edit">
+    <button class="chip" id="openBtn" aria-label="Open a design">
+      <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Open
+    </button>
+    <span class="sep" aria-hidden="true"></span>
     <button class="chip" data-view="iso">Iso</button>
     <button class="chip" data-view="front">Front</button>
     <button class="chip" data-view="top">Top</button>
@@ -325,7 +336,20 @@
       <button class="btn primary" type="button" id="newChatBtn">Start a new chat</button>
       <p class="hint">Clears this conversation. The model and effort are picked next to the message box, and changing them keeps the current chat.</p>
       <div class="usage" id="usage"></div>
-      <p class="hint">Runs Claude Code on your PC with your Claude subscription. The agent can only use SolidCraft's tools: no shell, no other files.</p>
+      <p class="hint">Runs Claude Code on your PC with your Claude subscription. The agent can only use SolidCraft's tools and look up file names: no shell, and it can't read other files.</p>
+    </form>
+  </dialog>
+
+  <dialog id="openSheet">
+    <form class="sheet" method="dialog">
+      <header>
+        <h2>Open a design</h2>
+        <button class="icon-btn" value="close" aria-label="Close">
+          <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </header>
+      <div class="recent" id="recentList"><p class="hint">Loading…</p></div>
+      <p class="hint">Not here? Ask the agent, e.g. “open the semi truck”. It can search your folders by name.</p>
     </form>
   </dialog>
 
@@ -353,6 +377,7 @@
     list_commands: 'Look up commands', describe_command: 'Look up command', body_topology: 'Inspect geometry',
     check_parameters: 'Check parameters', open: 'Open design', new_design: 'New design', compare_picture: 'Compare picture',
     pending: 'Wait', running: 'Check running', cancel: 'Cancel', crash_reports: 'Crash reports',
+    find_files: 'Find files', recent_designs: 'Recent designs', list_folder: 'List folder',
   };
 
   // ---------- tiny markdown
@@ -580,6 +605,8 @@
     els.conn.className = 'dot ' + (s.connected ? 'on' : 'off');
     els.startBtn.hidden = !!s.connected;
     els.designSub.classList.remove('warn');
+    state.dirty = !!(s.connected && s.dirty);
+    state.designName = s.connected ? s.name : '';
     if (s.connected) {
       els.designName.textContent = s.name;
       els.designSub.textContent = s.dirty ? 'Unsaved changes' : 'Saved';
@@ -704,6 +731,41 @@
 
   $('settingsBtn').addEventListener('click', () => { fillSettings(); els.settings.showModal(); });
   els.settings.addEventListener('click', e => { if (e.target === els.settings) els.settings.close(); });
+
+  // ---------- open a recent design
+  const openSheet = $('openSheet'), recentList = $('recentList');
+  const ago = t => {
+    if (!t) return '';
+    const s = Date.now() / 1000 - t;
+    return s < 3600 ? `${Math.max(1, Math.round(s / 60))} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`;
+  };
+  $('openBtn').addEventListener('click', async () => {
+    recentList.innerHTML = '<p class="hint">Loading…</p>';
+    openSheet.showModal();
+    try {
+      const r = await fetch('/api/recent');
+      const { designs = [] } = await r.json();
+      recentList.innerHTML = '';
+      if (!designs.length) { recentList.innerHTML = '<p class="hint">No recent designs found.</p>'; return; }
+      for (const d of designs) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'recent-item';
+        b.appendChild(div('rn', d.name.replace(/\.(sc|solidcraft)$/i, '')));
+        b.appendChild(div('rf', `${d.folder.split('/').slice(-2).join('/')}${d.openedAt ? ' · ' + ago(d.openedAt) : ''}`));
+        b.title = d.path;
+        b.onclick = () => openDesign(d);
+        recentList.appendChild(b);
+      }
+    } catch (e) { recentList.innerHTML = ''; recentList.appendChild(div('hint', e.message)); }
+  });
+  openSheet.addEventListener('click', e => { if (e.target === openSheet) openSheet.close(); });
+  async function openDesign(d) {
+    if (state.dirty && !confirm(`${state.designName || 'The open design'} has unsaved changes, which will be lost. Open ${d.name} anyway?`)) return;
+    openSheet.close();
+    toast(`Opening ${d.name}…`);
+    try { await post('/api/open', { path: d.path }); toast(`Opened ${d.name}`); refreshShot('fit'); }
+    catch (e) { toast(e.message); }
+  }
   $('newChatBtn').addEventListener('click', async () => {
     try {
       await post('/api/new', { model: state.model, effort: state.effort });
